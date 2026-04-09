@@ -1,36 +1,79 @@
-import subprocess
-from moviepy.editor import VideoFileClip
+import subprocess, os
+import numpy as np
+import librosa
+import whisper
 from pathlib import Path
-import sys
+from moviepy.editor import VideoFileClip
 
-url = sys.argv[1]
+WHISPER_MODEL = "tiny"
 
-OUTPUT = Path("output")
-OUTPUT.mkdir(exist_ok=True)
+def download_vod(url, output):
+    subprocess.run(["yt-dlp", "-o", output, url])
+    return output
 
-video = "vod.mp4"
+def extract_audio(video, audio):
+    subprocess.run([
+        "ffmpeg","-y","-i",video,"-vn",
+        "-acodec","pcm_s16le","-ar","16000","-ac","1",audio
+    ])
+    return audio
 
-# download
-subprocess.run(["yt-dlp", "-o", video, url])
+def analyse_audio(audio_path):
+    y, sr = librosa.load(audio_path)
+    rms = librosa.feature.rms(y=y)[0]
 
-# get duration
-clip = VideoFileClip(video)
-duration = int(clip.duration)
+    threshold = rms.mean() + 1.5 * rms.std()
+    spikes = np.where(rms > threshold)[0]
 
-# dynamic clips
-if duration < 600:
-    n, length = 2, 20
-elif duration < 3600:
-    n, length = 4, 30
-else:
-    n, length = 6, 40
+    return spikes, rms
 
-interval = duration // n
+def transcribe(audio_path):
+    model = whisper.load_model(WHISPER_MODEL)
+    result = model.transcribe(audio_path)
+    return result["segments"]
 
-for i in range(n):
-    start = i * interval
-    end = start + length
-    
-    sub = clip.subclip(start, end)
-    out = OUTPUT / f"clip_{i}.mp4"
-    sub.write_videofile(str(out), codec="libx264", audio_codec="aac")
+def generate_clips(video_path, spikes, output_dir, duration=45, max_clips=5):
+    clip = VideoFileClip(video_path)
+    fps = clip.fps
+
+    highlights = []
+    used = set()
+
+    for s in spikes:
+        t = s * 0.5  # approx seconds
+
+        if any(abs(t - u) < 30 for u in used):
+            continue
+
+        start = max(0, t - duration // 2)
+        end = start + duration
+
+        output = output_dir / f"clip_{len(highlights)}.mp4"
+
+        sub = clip.subclip(start, end)
+        sub.write_videofile(str(output), codec="libx264", audio_codec="aac", logger=None)
+
+        highlights.append(str(output))
+        used.add(t)
+
+        if len(highlights) >= max_clips:
+            break
+
+    return highlights
+
+def run_pipeline(url, job_id):
+    base = Path("clips") / job_id
+    base.mkdir(parents=True, exist_ok=True)
+
+    video = str(base / "vod.mp4")
+    audio = str(base / "audio.wav")
+
+    download_vod(url, video)
+    extract_audio(video, audio)
+
+    spikes, _ = analyse_audio(audio)
+    segments = transcribe(audio)
+
+    clips = generate_clips(video, spikes, base)
+
+    return clips
