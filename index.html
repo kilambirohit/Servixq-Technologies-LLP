@@ -1,19 +1,46 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Servixq Clipper</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
 
-<h1>🎬 Servixq AI Clipper</h1>
+<input id="url" placeholder="Paste link">
+<button onclick="go()">Generate</button>
 
-<input id="url" placeholder="Paste YouTube/Twitch/Kick URL">
-<button onclick="start()">Generate Clips</button>
+<div id="status"></div>
+<div id="clips"></div>
 
-<p id="status"></p>
+<script>
+const API = "https://your-railway-url.up.railway.app";
 
-<script src="app.js"></script>
+async function go() {
+    const url = document.getElementById("url").value;
 
-</body>
-</html>
+    const res = await fetch(API + "/clip", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({url})
+    });
+
+    const data = await res.json();
+    check(data.job_id);
+}
+
+async function check(id) {
+    const interval = setInterval(async () => {
+        const res = await fetch(API + "/status/" + id);
+        const data = await res.json();
+
+        document.getElementById("status").innerText = data.status;
+
+        if (data.status === "done") {
+            clearInterval(interval);
+
+            const div = document.getElementById("clips");
+            div.innerHTML = "";
+
+            data.clips.forEach(c => {
+                const v = document.createElement("video");
+                v.src = API + "/" + c;
+                v.controls = true;
+                div.appendChild(v);
+            });
+        }
+    }, 4000);
+}
+</script>
